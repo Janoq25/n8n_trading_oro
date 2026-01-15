@@ -1,0 +1,363 @@
+{
+  "name": "Gold Price Trading AI Advisor",
+  "nodes": [
+    {
+      "parameters": {
+        "functionCode": "// Convertir Metals.dev -> formato compatible con /predict\n// Salida esperada: { rates: { 'YYYY-MM-DD': { USD: <precio> }, ... } }\n\nconst payload = $json || {};\nconst formatted = {};\n\n// Soportar dos posibles formas de respuesta:\n// 1) rates: { 'YYYY-MM-DD': { metals: { gold: ... } } }\n// 2) series: [ { date: 'YYYY-MM-DD', metals: { gold: ... } }, ... ]\n\nif (payload.rates && typeof payload.rates === 'object') {\n  for (const [date, entry] of Object.entries(payload.rates)) {\n    const goldPrice =\n      entry?.metals?.gold ??\n      entry?.metals?.XAU ?? // por si la API usara XAU\n      null;\n\n    if (goldPrice != null && !isNaN(Number(goldPrice))) {\n      formatted[date] = { USD: Number(goldPrice) };\n    }\n  }\n} else if (Array.isArray(payload.series)) {\n  for (const day of payload.series) {\n    const date = day?.date;\n    const goldPrice =\n      day?.metals?.gold ??\n      day?.metals?.XAU ??\n      null;\n\n    if (date && goldPrice != null && !isNaN(Number(goldPrice))) {\n      formatted[date] = { USD: Number(goldPrice) };\n    }\n  }\n}\n\n// Validación mínima para evitar enviar vacío\nif (Object.keys(formatted).length === 0) {\n  throw new Error('No se encontraron valores de oro en la respuesta de Metals.dev');\n}\n\nreturn [{ json: { rates: formatted } }];"
+      },
+      "id": "a4b2d7c7-158d-419c-a443-eaded110e433",
+      "name": "🧩 Transform Metals.dev Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        144,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "3a998302-7108-4781-b17e-37297dcbefed",
+      "name": "✅ Success Response1",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "f58f3ceb-74ee-4c5e-b1ea-9e9731c8e14a",
+      "name": "🚨 Error Response1",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Procesar parámetros de entrada\nconst body = $json || {};\n\n// Extraer timeframe como número (eliminar 'd' si existe)\nlet timeframeValue = body.timeframe || '30d';\nif (typeof timeframeValue === 'string') {\n  timeframeValue = parseInt(timeframeValue.replace(/[^0-9]/g, ''), 10) || 30;\n}\n\n// Extraer prediction_horizon como número\nlet horizonValue = body.prediction_horizon || '2d';\nif (typeof horizonValue === 'string') {\n  horizonValue = parseInt(horizonValue.replace(/[^0-9]/g, ''), 10) || 2;\n}\n\nreturn [{\n  execution_id: body.execution_id || (Date.now().toString()),\n  timeframe: timeframeValue,\n  investment_amount: Number(body.investment_amount || 1000),\n  prediction_horizon_days: Math.min(Math.max(horizonValue, 1), 3),\n  symbol: 'XAUUSD'\n}];"
+      },
+      "id": "a206ab34-11b7-43d2-97a8-4acc7cfbeef3",
+      "name": "⚙️ Process Parameters",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -192,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gold-trading",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "73a4c5ff-5d1c-40f0-84c0-e9ff3c72fc95",
+      "name": "📱 Streamlit Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        400
+      ],
+      "webhookId": "4e1533a5-f73b-46f3-a2da-d14b8e2fc498"
+    },
+    {
+      "parameters": {
+        "url": "https://api.metals.dev/v1/timeseries",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "JXE1AIRUH7IEKJRKNRE2984RKNRE2"
+            },
+            {
+              "name": "start_date",
+              "value": "={{ $now.minus({ days: 30 }).toFormat('yyyy-LL-dd') }}"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $now.toFormat('yyyy-LL-dd') }}"
+            },
+            {
+              "name": "currency",
+              "value": "USD"
+            },
+            {
+              "name": "unit",
+              "value": "toz"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "ddb060ee-4f86-4e3d-bc6f-227d1e989290",
+      "name": "💰 Gold API Fetch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -32,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://056111d22ea9.ngrok-free.app/predict",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  gold_data: $node['🧩 Transform Metals.dev Data'].json.rates,\n  timeframe: $node['⚙️ Process Parameters'].json.timeframe,\n  investment_amount: $node['⚙️ Process Parameters'].json.investment_amount,\n  prediction_horizon_days: $node['⚙️ Process Parameters'].json.prediction_horizon_days\n}) }}",
+        "options": {}
+      },
+      "id": "f01583e6-ee15-49ea-8587-5d2595e62538",
+      "name": "🤖 AI Model Prediction",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        320,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Analizar resultados de la IA\nconst predictionResult = $input.first().json;\nconst goldData = $node['🧩 Transform Metals.dev Data'].json; // usar datos transformados\nconst params = $node['⚙️ Process Parameters'].json;\n\n// Calcular métricas adicionales\nconst rates = goldData.rates || {};\nconst dates = Object.keys(rates).sort();\nconst prices = dates.map(date => rates[date]?.USD || 0);\n\n// Guardas por datos insuficientes\nif (prices.length < 2) {\n  throw new Error('Insufficient gold price data');\n}\n\nconst currentPrice = prices[prices.length - 1] || 0;\nconst previousPrice = prices[prices.length - 2] || currentPrice;\nconst priceChange = currentPrice - previousPrice;\nconst priceChangePercent = previousPrice > 0 ? (priceChange / previousPrice) * 100 : 0;\n\n// Generar recomendación basada en predicción de IA (mantener compatibilidad)\nlet recommendation = predictionResult.recommendation || predictionResult.prediction || 'HOLD';\nlet risk_level = predictionResult.risk_level || 'MEDIUM';\n\n// Preparar datos para gráfico (serie simple)\nconst chartData = dates.map((d, i) => ({ date: d, price: prices[i] }));\n\nreturn [{\n  execution_id: params.execution_id,\n  timeframe: params.timeframe,\n  investment_amount: params.investment_amount,\n  current_price: currentPrice,\n  price_change: priceChange,\n  price_change_percent: priceChangePercent,\n  ai_recommendation: recommendation,\n  predicted_price: predictionResult.predicted_price || currentPrice,\n  prediction_horizon: predictionResult.horizon || '7 days',\n  // Análisis de riesgo\n  risk_level: risk_level,\n  volatility: predictionResult.volatility || 0.1,\n  // Datos para gráfico\n  chart_data: chartData,\n  historical_data: goldData.rates,\n  // Timestamps\n  processed_at: new Date().toISOString(),\n  data_points: prices.length,\n  confidence: predictionResult.confidence\n}];"
+      },
+      "id": "ac45f51d-b9c6-4a07-810d-896642101c76",
+      "name": "📊 Analyze Results",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        592,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "gold_trading_recommendations",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "execution_id",
+              "fieldValue": "={{ $json.execution_id }}"
+            },
+            {
+              "fieldId": "timeframe",
+              "fieldValue": "={{ $json.timeframe }}"
+            },
+            {
+              "fieldId": "investment_amount",
+              "fieldValue": "={{ $json.investment_amount }}"
+            },
+            {
+              "fieldId": "risk_tolerance",
+              "fieldValue": "={{ $json.risk_level }}"
+            },
+            {
+              "fieldId": "current_price",
+              "fieldValue": "={{ $json.current_price }}"
+            },
+            {
+              "fieldId": "price_change",
+              "fieldValue": "={{ $json.price_change }}"
+            },
+            {
+              "fieldId": "price_change_percent",
+              "fieldValue": "={{ $json.price_change_percent }}"
+            },
+            {
+              "fieldId": "ai_recommendation",
+              "fieldValue": "={{ $json.ai_recommendation }}"
+            },
+            {
+              "fieldId": "predicted_price",
+              "fieldValue": "={{ $json.predicted_price }}"
+            },
+            {
+              "fieldId": "risk_level",
+              "fieldValue": "={{ $json.risk_level }}"
+            },
+            {
+              "fieldId": "volatility",
+              "fieldValue": "={{ $json.volatility }}"
+            },
+            {
+              "fieldId": "chart_data",
+              "fieldValue": "={{ $json.chart_data }}"
+            },
+            {
+              "fieldId": "processed_at",
+              "fieldValue": "={{ $json.processed_at }}"
+            },
+            {
+              "fieldId": "confidence_score",
+              "fieldValue": "={{ $json.confidence }}"
+            }
+          ]
+        }
+      },
+      "id": "f5c4fe10-2500-408d-be31-c00274efe640",
+      "name": "💾 Supabase Storage",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        832,
+        400
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "dq3P5UhN2Y77ukbH",
+          "name": "Supabase account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Manejar errores\nconst item = $input.first();\nconst err = item.json || {};\nconst originalParams = $node['⚙️ Process Parameters'].json;\n\nreturn [{\n  error: true,\n  message: err?.message || 'Error desconocido en el análisis',\n  execution_id: originalParams.execution_id,\n  timestamp: new Date().toISOString(),\n  suggestion: 'Por favor intenta nuevamente en unos minutos'\n}];"
+      },
+      "id": "122a69a8-34b1-48a5-86ec-9f17f6072edc",
+      "name": "🚨 Error Handler",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        832,
+        608
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "🧩 Transform Metals.dev Data": {
+      "main": [
+        [
+          {
+            "node": "🤖 AI Model Prediction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Process Parameters": {
+      "main": [
+        [
+          {
+            "node": "💰 Gold API Fetch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📱 Streamlit Webhook": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Process Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "💰 Gold API Fetch": {
+      "main": [
+        [
+          {
+            "node": "🧩 Transform Metals.dev Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🤖 AI Model Prediction": {
+      "main": [
+        [
+          {
+            "node": "📊 Analyze Results",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "🚨 Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Analyze Results": {
+      "main": [
+        [
+          {
+            "node": "💾 Supabase Storage",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "🚨 Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "💾 Supabase Storage": {
+      "main": [
+        [
+          {
+            "node": "✅ Success Response1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚨 Error Handler": {
+      "main": [
+        [
+          {
+            "node": "🚨 Error Response1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "e3127a88-5173-445f-bccb-e67eb631f7db",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "83ba41fc8f8b6243101d7fb2fd991eb3224dc773eb53e0ed36820c9bd303802e"
+  },
+  "id": "1ubpTLgrDkpEKnh2",
+  "tags": []
+}
